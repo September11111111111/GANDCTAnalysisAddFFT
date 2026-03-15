@@ -1,49 +1,48 @@
 #!/bin/bash
-DATASET_DIRS="$HOME/datasets"
+set -e
 
-build()
-{
-    docker build -t dct .
+DATASET_DIRS="/d/datasets/gandct"
+IMAGE="dct"
+
+build() {
+    docker build -t "$IMAGE" .
 }
 
-shell() 
-{
-    docker run --gpus all -it -v $DATASET_DIRS:/dct/datasets -v $(pwd):/dct dct
-}
+shell() {
+    PROJECT_DIR="$(pwd -W)"
+    DATASET_DIR_WIN="$(cygpath -w "$DATASET_DIRS")"
 
-tests() 
-{
-    docker run -it -v $(pwd):/dct dct
-}
-
-clean() 
-{
-    rm -r log ckpt final_models
+    docker run --rm -it \
+      --gpus all \
+      -v "$PROJECT_DIR:/dct" \
+      -v "$DATASET_DIR_WIN:/dct/datasets" \
+      dct bash -lc "cd /dct && exec bash"
 }
 
 
-print_usage() 
-{
-    echo "Choose: docker.sh {build|download|convert|shell}"
-    echo "    build - Build the Dockerfile."
+tests() {
+    docker run --rm -it \
+      -v "$(pwd):/dct" \
+      -w /dct \
+      "$IMAGE" pytest
+}
+
+clean() {
+    rm -rf log ckpt final_models
+}
+
+print_usage() {
+    echo "Usage: ./docker.sh {build|shell|tests|clean}"
+    echo "    build - Build the Docker image."
     echo "    shell - Spawn a shell inside the docker container."
-    echo "    tests - Spawn Docker instance for pytest."
+    echo "    tests - Run pytest inside the container."
     echo "    clean - Cleanup directories from training."
 }
 
-if [[ $1 == "" ]]; then
-    echo "No argument provided"
-    print_usage
-elif [[ $1 == "build" ]]; then
-    build
-elif [[ $1 == "shell" ]]; then
-    shell 
-elif [[ $1 == "tests" ]]; then
-    shell 
-elif [[ $1 == "clean" ]]; then
-    clean 
-else 
-    echo "Argument not recognized!."
-    print_usage
-fi
-
+case "$1" in
+  build) build ;;
+  shell) shell ;;
+  tests) tests ;;
+  clean) clean ;;
+  ""|*) print_usage; exit 1 ;;
+esac

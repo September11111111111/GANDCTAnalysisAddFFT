@@ -11,9 +11,9 @@ from src.dataset import image_paths, serialize_data
 from src.image_np import dct2, load_image, normalize, scale_image
 from src.math import log_scale, welford
 
-TRAIN_SIZE = 100_000
-VAL_SIZE = 20_000
-TEST_SIZE = 30_000
+TRAIN_SIZE = 1200
+VAL_SIZE = 400
+TEST_SIZE = 400
 # TRAIN_SIZE = 20_000
 # VAL_SIZE = 2_000
 # TEST_SIZE = 5_000
