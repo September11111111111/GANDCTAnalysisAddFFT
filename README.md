@@ -27,5 +27,3 @@
 | DCT    | log2   | 0.9375   | 26666.7 img/s |
 | DCT    | cnn    | 0.9488   | 796.8 img/s |
 | DCT    | resnet | 0.9525   | 790.5 img/s |
-### PS
-应该会更新，暂时把readme当成blog写吧
