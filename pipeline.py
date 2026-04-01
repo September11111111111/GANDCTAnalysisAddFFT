@@ -27,7 +27,19 @@ Config defaults match mid-scale split: 5999/1799/1799 per class.
 import argparse
 import os
 import time
+import warnings
 import numpy as np
+from scipy import sparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+try:
+    import pyfftw
+    pyfftw.interfaces.cache.enable()
+    HAS_PYFFTW = True
+except ImportError:
+    HAS_PYFFTW = False
+    warnings.warn("pyfftw not installed — falling back to np.fft. "
+                   "Install with: pip install pyfftw")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 0. Shared constants / helpers
@@ -116,46 +128,121 @@ def load_and_split(lsun_path, celeb_path,
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 2. FFT / PSD / HFE feature extraction
+# 2. FFT / PSD / HFE feature extraction  (optimized)
+# ─────────────────────────────────────────────────────────────────────────────
+# 优化点:
+#   a) 稀疏矩阵向量化 — for+bincount → CSR sparse matmul, ~5-10×
+#   b) pyfftw 替换     — FFTW SIMD + 多线程 FFT, ~2-5×
+#   c) ThreadPool 并行 — batch 间多线程, ~2-4× (FFT/sparse 均释放 GIL)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _build_radial_cache(h=128, w=128, bins=64):
+    """
+    构建 radial binning 的 CSR 稀疏矩阵 M (bins, H*W).
+    M[bin, pixel] = 1 / count_of_bin, 使得:
+      prof = (M @ psd_flat.T).T   →  直接得到 radial profile 均值
+    一次稀疏矩阵乘法替代整个 Python for 循环.
+    """
     cy, cx = h // 2, w // 2
     y, x   = np.indices((h, w))
     r      = np.sqrt((x - cx) ** 2 + (y - cy) ** 2)
     rb     = (r / (r.max() + 1e-8) * (bins - 1)).astype(np.int32)
     rb_flat = rb.ravel()
-    cnt     = np.bincount(rb_flat, minlength=bins).astype(np.float32)
+
+    n_pixels = h * w
+    cnt = np.bincount(rb_flat, minlength=bins).astype(np.float64)
     cnt[cnt == 0] = 1.0
-    return {"rb_flat": rb_flat, "cnt": cnt, "bins": bins}
+
+    # COO → CSR: 矩阵乘法最快的稀疏格式
+    row = rb_flat                             # bin index per pixel
+    col = np.arange(n_pixels, dtype=np.int32) # pixel index
+    val = (1.0 / cnt[rb_flat]).astype(np.float32)
+
+    M = sparse.csr_matrix(
+        (val, (row, col)),
+        shape=(bins, n_pixels),
+        dtype=np.float32,
+    )
+
+    return {"M": M, "bins": bins, "rb_flat": rb_flat,
+            "cnt": cnt.astype(np.float32)}
+
+
+def _fft2_fast(imgs):
+    """2D FFT + fftshift, 优先 pyfftw (SIMD+多线程), fallback numpy."""
+    if HAS_PYFFTW:
+        F = pyfftw.interfaces.numpy_fft.fft2(
+            imgs, axes=(-2, -1),
+            threads=-1,
+            planner_effort='FFTW_MEASURE',
+        )
+    else:
+        F = np.fft.fft2(imgs, axes=(-2, -1))
+    return np.fft.fftshift(F, axes=(-2, -1))
 
 
 def _fft_batch(imgs, cache, hfe_ratio=0.25):
-    bins    = cache["bins"]
-    rb_flat = cache["rb_flat"]
-    cnt     = cache["cnt"]
-    F   = np.fft.fftshift(np.fft.fft2(imgs, axes=(-2, -1)), axes=(-2, -1))
+    """
+    向量化 FFT batch 处理:
+      1) pyfftw FFT → PSD
+      2) 稀疏矩阵 M @ psd.T → radial profile (无 for 循环)
+      3) log1p + HFE + z-score 归一化
+    输出与原版完全兼容: (B, bins+1) float32
+    """
+    bins = cache["bins"]
+    M    = cache["M"]
+
+    # 1) FFT → PSD
+    F   = _fft2_fast(imgs)
     psd = (F.real ** 2 + F.imag ** 2).astype(np.float32)
-    B   = imgs.shape[0]
-    prof = np.empty((B, bins), np.float32)
-    for i in range(B):
-        s = np.bincount(rb_flat, weights=psd[i].ravel(), minlength=bins)
-        prof[i] = s / cnt
+
+    # 2) Radial binning — 一步稀疏矩阵乘法
+    B = imgs.shape[0]
+    psd_flat = psd.reshape(B, -1)           # (B, H*W)
+    prof = (M @ psd_flat.T).T               # (B, bins)
+
+    # 3) 后处理 (与原版一致)
     prof = np.log1p(prof)
     k    = int(bins * (1 - hfe_ratio))
     hfe  = prof[:, k:].sum(1) / (prof.sum(1) + 1e-8)
     mu   = prof.mean(1, keepdims=True)
     std  = prof.std(1,  keepdims=True) + 1e-8
     prof = (prof - mu) / std
+
     return np.concatenate([prof, hfe[:, None]], axis=1).astype(np.float32)
 
 
 def extract_fft_features(images, bins=FFT_BINS, hfe_ratio=FFT_HFE_RATIO,
-                          batch_size=FFT_BATCH):
+                          batch_size=512, n_workers=None):
+    """
+    优化版 FFT 特征提取 (接口与原版兼容).
+    batch_size 默认提升到 512 (向量化后大 batch 更高效).
+    n_workers: 并行线程数, None=auto, 1=串行.
+    """
+    if n_workers is None:
+        n_workers = min(os.cpu_count() or 1, 4)
+
     cache  = _build_radial_cache(h=images.shape[1], w=images.shape[2], bins=bins)
-    chunks = []
-    for i in range(0, len(images), batch_size):
-        chunks.append(_fft_batch(images[i:i+batch_size], cache, hfe_ratio))
+    n      = len(images)
+    starts = list(range(0, n, batch_size))
+
+    def _process(start):
+        end = min(start + batch_size, n)
+        return start, _fft_batch(images[start:end], cache, hfe_ratio)
+
+    if n_workers <= 1 or len(starts) <= 1:
+        chunks = [_process(s)[1] for s in starts]
+    else:
+        # FFT 和稀疏矩阵乘法均释放 GIL, 多线程有效
+        chunks = [None] * len(starts)
+        with ThreadPoolExecutor(max_workers=n_workers) as pool:
+            futures = {pool.submit(_process, s): idx
+                       for idx, s in enumerate(starts)}
+            for fut in as_completed(futures):
+                idx = futures[fut]
+                _, result = fut.result()
+                chunks[idx] = result
+
     return np.concatenate(chunks, 0)
 
 
