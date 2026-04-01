@@ -12,8 +12,15 @@ from src.models import (build_multinomial_regression,
                         build_multinomial_regression_l2, build_resnet,
                         build_simple_cnn, build_simple_nn)
 
+# ===== 性能优化 =====
+from tensorflow.keras import mixed_precision
+mixed_precision.set_global_policy('mixed_float16')
+
+# 启用 XLA JIT 编译，加速计算图执行
+tf.config.optimizer.set_jit(True)
+
 AUTOTUNE = tf.data.experimental.AUTOTUNE
-BATCH_SIZE = 32
+BATCH_SIZE = 256  # 从128提升到256，进一步提高GPU利用率
 
 # Upsampling / FFHQ
 # TRAIN_SIZE = 20_000
@@ -35,13 +42,24 @@ tf.random.set_seed(1)
 
 def load_tfrecord(path, train=True, unbounded=True):
     """Load tfrecords."""
-    raw_image_dataset = tf.data.TFRecordDataset(path)
+    # 优化 TFRecordDataset 读取：启用并行读取和缓冲
+    raw_image_dataset = tf.data.TFRecordDataset(
+        path, num_parallel_reads=AUTOTUNE, buffer_size=8 * 1024 * 1024)
+
     dataset = raw_image_dataset.map(lambda x: deserialize_data(
         x, shape=INPUT_SHAPE), num_parallel_calls=AUTOTUNE)
+
     if train:
         dataset = dataset.take(TRAIN_SIZE)
 
-    dataset = dataset.batch(BATCH_SIZE)
+    # cache() 将数据缓存到内存，避免每个 epoch 重复解析 TFRecord
+    # 数据集很小(2400张)，完全可以放进内存
+    dataset = dataset.cache()
+
+    if train:
+        dataset = dataset.shuffle(buffer_size=TRAIN_SIZE)
+
+    dataset = dataset.batch(BATCH_SIZE, drop_remainder=True)
 
     if unbounded:
         dataset = dataset.repeat()
@@ -82,9 +100,10 @@ def build_model(args):
         else:
             loss = tf.keras.losses.sparse_categorical_crossentropy
         metrics = ["acc"]
-        model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=learning_rate, ),
+        model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=learning_rate),
                       loss=loss,
-                      metrics=metrics)
+                      metrics=metrics,
+                      jit_compile=True)  # XLA 编译加速模型前向/反向传播
 
     model_name = f"{args.MODEL}_{dt.datetime.now().strftime('%Y-%m-%d-%H-%M-%S')}_batch_{args.batch_size}_learning_rate_{learning_rate}"
     return model, model_name

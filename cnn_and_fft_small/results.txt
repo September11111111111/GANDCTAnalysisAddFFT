@@ -1,0 +1,4 @@
+[FFT] val acc=1.0000 auc=1.0000  test acc=1.0000 auc=1.0000
+[FFT] val acc=1.0000 auc=1.0000  test acc=1.0000 auc=1.0000
+[FFT] val acc=1.0000 auc=1.0000  test acc=1.0000 auc=1.0000
+[FFT] val acc=1.0000 auc=1.0000  test acc=1.0000 auc=1.0000
