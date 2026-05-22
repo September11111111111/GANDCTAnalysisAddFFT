@@ -1,0 +1,19 @@
+[FFT] val acc=0.9615 auc=0.9908  test acc=0.9643 auc=0.9934
+[CNN arch=simple] val acc=0.9900 auc=0.9995  test acc=0.9892 auc=0.9994
+
+  Routing: FFT=3007 (50.1%)  CNN=2993 (49.9%)
+  FFT branch latency : 3.4 ms (877253 img/s)
+  CNN branch latency : 1160.8 ms (2578 img/s)
+  Random-router TEST acc=0.9747  auc=0.9971
+
+[Cascade thr=(0.20,0.80)] FFT=5410 CNN=590  TEST acc=0.9848 auc=0.9961
+
+[Tuned Cascade best=(0.40,0.65)] FFT=5814 (96.9%)  CNN=186 (3.1%)  TEST acc=0.9738 auc=0.9947
+[Real E2E Cascade] TEST acc=0.9718 auc=0.9938  throughput=8780.02 img/s  (FFTfeat=0.6253s, FFTcls=0.0027s, CNN=0.0554s)
+
+============================================================
+  FINAL COMPARISON
+============================================================
+  Pure FFT      TEST auc=0.9934  acc=0.9643
+  Tuned Cascade TEST auc=0.9947  acc=0.9738  (thr=0.40/0.65)
+============================================================

@@ -1,0 +1,20 @@
+[FFT] val acc=0.8605 auc=0.8762  test acc=0.9642 auc=0.9934
+[CNN arch=mil] val acc=0.9903 auc=0.9996  test acc=0.9900 auc=0.9993
+
+  Routing: FFT=3007 (50.1%)  CNN=2993 (49.9%)
+  FFT branch latency : 3.3 ms (908141 img/s)
+  CNN branch latency : 1391.1 ms (2151 img/s)
+  Random-router TEST acc=0.9763  auc=0.9971
+
+[Cascade thr=(0.20,0.80)] FFT=5492 CNN=508  TEST acc=0.9868 auc=0.9961
+
+[Tuned Cascade best=(0.05,0.95)] FFT=4662 (77.7%)  CNN=1338 (22.3%)  TEST acc=0.9897 auc=0.9976
+[Real E2E Cascade] TEST acc=0.9790 auc=0.9882  throughput=5281.83 img/s  (FFTfeat=0.5838s, FFTcls=0.0025s, CNN=0.5497s)
+[Heatmap] exported 60 png + raw.npz → ./runs/stylegan_mil_full/heatmaps
+
+============================================================
+  FINAL COMPARISON
+============================================================
+  Pure FFT      TEST auc=0.9934  acc=0.9642
+  Tuned Cascade TEST auc=0.9976  acc=0.9897  (thr=0.05/0.95)
+============================================================
